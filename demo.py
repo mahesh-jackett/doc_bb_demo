@@ -14,7 +14,7 @@ def process_image(input_image):
     return buffer.getvalue()
 
 
-st.set_page_config(page_title="Bounding Box",page_icon="☯️")
+st.set_page_config(page_title="Bounding Box",page_icon="☯️",layout="wide")
 
 if 'THRESH' not in st.session_state: # Since model is always dependent on threshold
     st.session_state['THRESH'] = 0.6
