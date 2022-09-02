@@ -1,5 +1,5 @@
 torch==1.12
-torchaudio
+numpy
 torchvision
 absl-py
 altair
@@ -43,11 +43,8 @@ kiwisolver
 Markdown
 MarkupSafe
 matplotlib
-mkl-fft
-mkl-random
 mkl-service
 mypy-extensions
-numpy
 oauthlib
 omegaconf
 opencv-python
