@@ -47,7 +47,7 @@ mkl-service
 mypy-extensions
 oauthlib
 omegaconf
-opencv-python
+opencv-python-headless
 packaging
 pandas
 pathspec
