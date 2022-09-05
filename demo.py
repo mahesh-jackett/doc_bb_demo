@@ -13,8 +13,7 @@ def process_image(input_image):
     img.save(buffer, format="jpeg")
     return buffer.getvalue()
 
-
-st.set_page_config(page_title="Bounding Box",page_icon="☯️",layout="wide")
+st.set_page_config(page_title="Bounding Box",page_icon="☯️")
 
 if 'THRESH' not in st.session_state: # Since model is always dependent on threshold
     st.session_state['THRESH'] = 0.6
@@ -45,19 +44,26 @@ st.markdown("## Upload Image")
 st.session_state['uploaded'] = st.file_uploader("", type = ["jpg", "png", "jpeg"], key = "upload", help = "Upload the Image from your device")
 
 if st.session_state['uploaded'] is not None:
-    file_bytes = np.asarray(bytearray(st.session_state['uploaded'].read()), dtype=np.uint8) # open with OpenCv
-    st.session_state['uploaded'] = cv2.imdecode(file_bytes, 1) # change session state 
+    try:
+        file_bytes = np.asarray(bytearray(st.session_state['uploaded'].read()), dtype=np.uint8) # open with OpenCv
+        st.session_state['uploaded'] = cv2.imdecode(file_bytes, 1) # change session state 
+    except Exception as e:
+        st.markdown(f"""<b><span style="color: #ff0000">Image Loading Error: </span>{e}</b><br>Take a screenshot and reload""", unsafe_allow_html=True)
 
-    with st.spinner("Processing Image..."):
-        st.session_state['result'] = get_results(st.session_state['model'], st.session_state['uploaded']) # Get Bounding Boxes
-
-    st.markdown(f"""<b> Current Threshold: <span style="color: #ff0000">{str(st.session_state['THRESH'])} </span> </b>|| Change threshold to see variations in results""",
-    unsafe_allow_html=True) # Show current threshold value
-
-    st.session_state['download'] = process_image(st.session_state['result'])
-    _ = st.download_button(label="Download",data = st.session_state['download'], file_name="image.jpeg",mime="image/jpeg")
+    try:
+        with st.spinner("Processing Image..."):
+            st.session_state['result'] = get_results(st.session_state['model'], st.session_state['uploaded']) # Get Bounding Boxes
     
-    st.image(st.session_state['result'], channels="RGB")
+        st.markdown(f"""<b> Current Threshold: <span style="color: #ff0000">{str(st.session_state['THRESH'])} </span> </b>|| Change threshold to see variations in results""",
+        unsafe_allow_html=True) # Show current threshold value
 
+        try:
+            st.session_state['download'] = process_image(st.session_state['result'])
+            _ = st.download_button(label="Download",data = st.session_state['download'], file_name="image.jpeg",mime="image/jpeg")
+        except Exception as e:
+            st.markdown(f"""<b><span style="color: #ff0000">Download Error: </span>{e}</b><br>""", unsafe_allow_html=True)
 
-
+        st.image(st.session_state['result'], channels="RGB")
+    
+    except Exception as e:
+        st.markdown(f"""<b><span style="color: #ff0000">Inference Error: </span>{e}</b><br>Take a screenshot and reload""", unsafe_allow_html=True)
