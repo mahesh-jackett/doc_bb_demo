@@ -22,7 +22,7 @@ finally:
 
 
 
-def build_cfg(THRESH:float = 0.6):
+def build_cfg():
 
     cfg = get_cfg()
 
@@ -32,7 +32,7 @@ def build_cfg(THRESH:float = 0.6):
 
     cfg.MODEL.DEVICE = "cpu"
 
-    cfg.DATALOADER.NUM_WORKERS: 2
+    cfg.DATALOADER.NUM_WORKERS = 2
     cfg.TEST.EVAL_PERIOD = 20 # Evaluate after N epochs
 
     cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 128 # Default 256 
@@ -54,19 +54,19 @@ def build_cfg(THRESH:float = 0.6):
     cfg.SOLVER.GAMMA = 0.05
     cfg.SOLVER.CHECKPOINT_PERIOD = 20  # Save weights after these many epochs
 
-    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = THRESH
+    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.1
     return cfg
 
 
 class TorchModel(torch.nn.Module):
-    def __init__(self, thresh:float = 0.6) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        cfg = build_cfg(thresh) # Own function in helpers.py to load weights
+        cfg = build_cfg() # Own function in helpers.py to load weights
         self.model = build_model(cfg) # Build Model
         _ = DetectionCheckpointer(self.model).load(cfg.MODEL.WEIGHTS)  # Load weights
         self.model = self.model.eval() # In evaluation mode
     
-    def forward(self, INPUT):
+    def forward(self, INPUT, score_thresh:float = 0.6, nms:float = 0.3):
         if isinstance(INPUT, (np.ndarray, torch.Tensor)):
             INPUT = [{"image":INPUT}]
 
@@ -75,10 +75,54 @@ class TorchModel(torch.nn.Module):
         
         boxes, labels, scores = outputs.pred_boxes.tensor, outputs.pred_classes, outputs.scores.detach()
 
-        return boxes, labels, scores
+        nms_indices = apply_score_nms(boxes.numpy(), scores.numpy(), score_thresh = score_thresh, nms = nms)
+
+        return boxes[nms_indices], labels[nms_indices], scores[nms_indices]
 
 
-def draw_boxes( image, boxes, labels, classes, COLORS):
+def apply_score_nms(dets:np.ndarray, scores:np.ndarray, score_thresh:float, nms:float) -> list:
+    '''
+    apply Min thresholding and NMS and return only the indices which fulfil the criteria
+    args:
+        dets: [N,4] array depecting bounding boxes coordinates
+        scores: N elemment array describing the probability of detection
+        score_thresh: probability threshold above which the detections will be considered
+        nms: drop the area of overlapping between boxes if the common area is more than this number
+    '''
+    mask = np.where(scores >= score_thresh)[0]
+    scores = scores[mask]
+    dets = dets[mask]
+
+    x1 = dets[:, 0]
+    y1 = dets[:, 1]
+    x2 = dets[:, 2]
+    y2 = dets[:, 3]
+
+    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+    order = scores.argsort()[::-1]
+
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+
+        w = np.maximum(0.0, xx2 - xx1 + 1)
+        h = np.maximum(0.0, yy2 - yy1 + 1)
+        inter = w * h
+        ovr = inter / (areas[i] + areas[order[1:]] - inter)
+
+        inds = np.where(ovr <= nms)[0]
+        order = order[inds + 1]
+
+    return keep
+
+
+
+def draw_boxes( image, boxes, labels, classes, scores, COLORS):
     '''
     Accept BGR image and plot Bounding boxe, labels on top of it
     '''
@@ -90,14 +134,15 @@ def draw_boxes( image, boxes, labels, classes, COLORS):
             (int(box[2]), int(box[3])),
             color, 2)
 
-        cv2.putText(image, classes[i], (int(box[0]), int(box[1] - 5)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2,
+        text = f"{classes[i]} - {str(round(scores[i], 3))}"
+        cv2.putText(image, text, (int(box[0]), int(box[1] - 5)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
                     lineType=cv2.LINE_AA)
 
     return image[:,:,::-1] # Return BGR Image
 
 
-def renormalize_cam_in_bounding_boxes(image_float_np, grayscale_cam, boxes, classes, labels, colors):
+def renormalize_cam_in_bounding_boxes(image_float_np, grayscale_cam, boxes, labels, classes, scores, colors):
     """Normalize the CAM to be in the range [0, 1] 
     inside every bounding boxes, and zero outside of the bounding boxes. """
     renormalized_cam = np.zeros(grayscale_cam.shape, dtype=np.float32)
@@ -110,7 +155,7 @@ def renormalize_cam_in_bounding_boxes(image_float_np, grayscale_cam, boxes, clas
     renormalized_cam = np.max(np.float32(images), axis = 0)
     renormalized_cam = scale_cam_image(renormalized_cam)
     eigencam_image_renormalized = show_cam_on_image(image_float_np, renormalized_cam)
-    image_with_bounding_boxes = draw_boxes(eigencam_image_renormalized, boxes, labels, classes, colors)
+    image_with_bounding_boxes = draw_boxes(eigencam_image_renormalized, boxes, labels, classes, scores, colors)
     return image_with_bounding_boxes
 
 
@@ -135,14 +180,14 @@ def fasterrcnn_reshape_transform(x):
     return activations
 
 
-def get_results(model, image):
+def get_results(model, image, score_thresh, nms):
     '''
     Get results from the model given an image
     '''
     float_image = np.float32(image/255.) #  Normalized BGR image between 0-1
 
     tensor_image = torch.from_numpy(image.copy()).permute(2, 0, 1) # [B, channels, W, H]
-    tensor_boxes, labels, scores = model(tensor_image)
+    tensor_boxes, labels, scores = model(tensor_image, score_thresh, nms)
 
     boxes = np.int32(tensor_boxes.numpy())
     labels = [i for i in range(len(labels))]
@@ -150,10 +195,10 @@ def get_results(model, image):
 
     COLORS = np.random.uniform(0, 255, size=(len(set(labels)), 3)) # for plotting purpose
 
-    return float_image, tensor_image, boxes, labels, classes, COLORS
+    return float_image, tensor_image, boxes, labels, classes, scores.numpy(), COLORS
 
 
-def eigen_res(model, float_image, tensor_image, labels, boxes, classes, colors):
+def eigen_res(model, float_image, tensor_image, boxes, labels, classes, scores, colors):
     '''
     Run the EigenCam to get results
     '''
@@ -167,8 +212,8 @@ def eigen_res(model, float_image, tensor_image, labels, boxes, classes, colors):
 
     cam_image = show_cam_on_image(float_image, grayscale_cam) 
 
-    RGB_unnormalized_image = draw_boxes(cam_image, boxes, labels, classes, colors) # without normalizing
-    RGB_normalized_image = renormalize_cam_in_bounding_boxes(float_image, grayscale_cam,  boxes, classes, labels, colors) # with Normalized Boxes
+    RGB_unnormalized_image = draw_boxes(cam_image, boxes, labels, classes, scores, colors) # without normalizing
+    RGB_normalized_image = renormalize_cam_in_bounding_boxes(float_image, grayscale_cam,  boxes, labels, classes, scores, colors) # with Normalized Boxes
 
     return RGB_unnormalized_image, RGB_normalized_image
 
